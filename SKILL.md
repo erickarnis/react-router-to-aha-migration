@@ -13,15 +13,9 @@ Patterns, tradeoffs, and measured results from porting a production React Router
 
 ## Before You Start
 
-Common objections and what we found after completing the port:
-
-**"Complex interactive pages are impossible without React."** Wrong. A study session with card flip animations, keyboard shortcuts, and spaced-repetition scheduling ported successfully using Alpine.js as a state machine with HTMX fire-and-forget POSTs.
+**"Complex interactive pages are impossible without React."** Wrong. A study session with card flip animations, keyboard shortcuts, and spaced-repetition scheduling ported successfully using Alpine.js as a state machine with HTMX POSTs.
 
 **"You'll lose optimistic UI."** True, but it rarely matters. Server round-trips take 100-150ms. Use `hx-disabled-elt="this"` to prevent double-submit during the wait.
-
-**What may surprise you:**
-- The partial page pattern creates more files than expected (components directory grew 80%)
-- Total code reduction is larger than expected (27% fewer lines, 33% less complexity)
 
 ## Measured Results
 
@@ -41,36 +35,19 @@ More files because every toggle button needs a partial page. Less code because n
 
 | Metric | React Router 7 | AHA Stack | Delta |
 |--------|----------------|-----------|-------|
-| JS files | 250 | 2 | -99% |
 | JS gzipped | 673 KB | 62 KB | **-91%** |
-| Client directory | 7.0 MB | 1.6 MB | -77% |
 
 ### Lighthouse (Simulated Mobile 4G)
-
-**Landing page:**
-
-| Metric | React Router 7 | AHA Stack | Delta |
-|--------|----------------|-----------|-------|
-| Performance Score | 66 | 89 | **+23 pts** |
-| FCP | 5,411 ms | 2,931 ms | -46% |
-| LCP | 5,411 ms | 2,931 ms | -46% |
-| CLS | 0.000 | 0.000 | same |
-| Transfer Size | 1,432 KB | 594 KB | -59% |
-
-**Explore page (species grid with filters):**
 
 | Metric | React Router 7 | AHA Stack | Delta |
 |--------|----------------|-----------|-------|
 | Performance Score | 60 | 87 | **+27 pts** |
-| FCP | 5,853 ms | 3,211 ms | -45% |
 | LCP | 7,412 ms | 3,211 ms | -57% |
 | Transfer Size | 1,837 KB | 808 KB | -56% |
 
 ## Route Migration Patterns
 
 ### Pattern 1: Loader → Astro Frontmatter
-
-Data fetching moves from a loader function into the Astro `---` fence.
 
 ```tsx
 // BEFORE: React Router
@@ -93,18 +70,13 @@ const species = await getSpecies()
 <SpeciesGrid species={species} />
 ```
 
-No loader function, no `loaderData` typing. Fetching and rendering share one file.
-
 ### Pattern 2: Action → Astro POST Handler
-
-React Router actions become POST handlers in the same Astro page frontmatter.
 
 ```tsx
 // BEFORE: React Router action
 export async function action({ request }: Route.ActionArgs) {
   const formData = await request.formData()
-  const name = formData.get("name") as string
-  await createDeck(name)
+  await createDeck(formData.get("name") as string)
   return redirect("/decks")
 }
 ```
@@ -114,8 +86,7 @@ export async function action({ request }: Route.ActionArgs) {
 // AFTER: Astro page
 if (Astro.request.method === "POST") {
   const formData = await Astro.request.formData()
-  const name = formData.get("name") as string
-  await createDeck(name)
+  await createDeck(formData.get("name") as string)
   return Astro.redirect("/decks")
 }
 ---
@@ -127,23 +98,16 @@ if (Astro.request.method === "POST") {
 
 ### Pattern 3: useFetcher → HTMX Partial
 
-React's `useFetcher` with optimistic UI becomes an HTMX partial that returns updated component HTML.
+The biggest conceptual shift. React's `useFetcher` becomes a component that posts to its own partial page. The partial renders the same Astro component — never duplicate component HTML.
 
 ```tsx
-// BEFORE: React Router useFetcher with optimistic UI
+// BEFORE: React Router useFetcher
 function FavouriteButton({ taxonId, isFavourited }: Props) {
   const fetcher = useFetcher()
-  const optimistic = fetcher.formData
-    ? fetcher.formData.get("intent") === "favourite"
-    : isFavourited
-
   return (
     <fetcher.Form method="post" action="/api/favourite">
       <input type="hidden" name="taxonId" value={taxonId} />
-      <input type="hidden" name="intent" value={optimistic ? "unfavourite" : "favourite"} />
-      <button type="submit">
-        <HeartIcon filled={optimistic} />
-      </button>
+      <button><HeartIcon filled={isFavourited} /></button>
     </fetcher.Form>
   )
 }
@@ -151,7 +115,7 @@ function FavouriteButton({ taxonId, isFavourited }: Props) {
 
 ```astro
 ---
-// AFTER: Astro component (no client JS)
+// AFTER: Astro component
 const { taxonId, isFavourited } = Astro.props
 ---
 <button
@@ -183,55 +147,15 @@ const result = await toggleFavourite(user.id, taxonId)
 <FavouriteButton taxonId={taxonId} isFavourited={result.favourited} />
 ```
 
-The partial renders the same Astro component — never duplicate component HTML in a partial page.
-
-### Pattern 4: useState → Alpine.js x-data
-
-Client-side UI state (open/close, tabs, selections) moves from React hooks to Alpine directives.
-
-```tsx
-// BEFORE: React useState
-function Dropdown({ items }: Props) {
-  const [open, setOpen] = useState(false)
-  return (
-    <div>
-      <button onClick={() => setOpen(!open)}>Menu</button>
-      {open && (
-        <ul>{items.map(item => <li key={item.id}>{item.name}</li>)}</ul>
-      )}
-    </div>
-  )
-}
-```
-
-```html
-<!-- AFTER: Alpine.js -->
-<div x-data="{ open: false }">
-  <button @click="open = !open">Menu</button>
-  <ul x-show="open" @click.outside="open = false" x-cloak>
-    <!-- server-rendered items -->
-  </ul>
-</div>
-```
-
-### Pattern 5: useSearchParams → HTMX hx-get + hx-include
-
-URL-driven filters move from React Router's `useSearchParams` to HTMX attributes.
+### Pattern 4: useSearchParams → HTMX hx-get + hx-include
 
 ```tsx
 // BEFORE: React Router
-function Filters() {
-  const [params, setParams] = useSearchParams()
-  return (
-    <select
-      value={params.get("sort") ?? "name"}
-      onChange={(e) => setParams(prev => { prev.set("sort", e.target.value); return prev })}
-    >
-      <option value="name">Name</option>
-      <option value="recent">Recent</option>
-    </select>
-  )
-}
+const [params, setParams] = useSearchParams()
+<select
+  value={params.get("sort") ?? "name"}
+  onChange={(e) => setParams(prev => { prev.set("sort", e.target.value); return prev })}
+>
 ```
 
 ```html
@@ -244,102 +168,47 @@ function Filters() {
   hx-push-url="true"
   hx-include="[name='region'], [name='taxon'], [name='q']"
 >
-  <option value="name">Name</option>
-  <option value="recent">Recent</option>
-</select>
 ```
 
-### Pattern 6: React State Machine → Alpine State Machine
+`hx-include` sends sibling filter values with each request. `hx-push-url="true"` keeps the URL in sync.
+
+### Pattern 5: React State Machine → Alpine State Machine
 
 ```tsx
-// BEFORE: React
-function StudySession({ cards }: Props) {
-  const [index, setIndex] = useState(0)
-  const [flipped, setFlipped] = useState(false)
-  const card = cards[index]
-
-  const handleRating = (rating: number) => {
-    fetch("/api/study", { method: "POST", body: JSON.stringify({ cardId: card.id, rating }) })
-    setFlipped(false)
-    setIndex(i => i + 1)
-  }
-
-  return (
-    <div>
-      {!flipped ? (
-        <div onClick={() => setFlipped(true)}>
-          <img src={card.photo} />
-          <p>What species?</p>
-        </div>
-      ) : (
-        <div>
-          <h2>{card.name}</h2>
-          <button onClick={() => handleRating(1)}>Again</button>
-          <button onClick={() => handleRating(3)}>Good</button>
-        </div>
-      )}
-    </div>
-  )
+// BEFORE: React — multiple useState hooks + event handlers
+const [flipped, setFlipped] = useState(false)
+const handleRating = (rating: number) => {
+  fetch("/api/study", { method: "POST", body: JSON.stringify({ cardId, rating }) })
+  setFlipped(false)
 }
 ```
 
 ```html
 <!-- AFTER: Alpine + HTMX -->
-<div
-  x-data="{ flipped: false }"
-  @keydown.space.window.prevent="!flipped && (flipped = true)"
->
+<div x-data="{ flipped: false }" @keydown.space.window.prevent="!flipped && (flipped = true)">
   <div x-show="!flipped" @click="flipped = true">
-    <img src={card.photo} />
-    <p>What species?</p>
+    <!-- front of card -->
   </div>
   <div x-show="flipped" x-cloak>
-    <h2>{card.name}</h2>
     <button
       hx-post="/partials/study-review"
       hx-vals='{"cardId": "...", "rating": 1}'
       hx-target="#study-area"
       @click="flipped = false"
     >Again</button>
-    <button
-      hx-post="/partials/study-review"
-      hx-vals='{"cardId": "...", "rating": 3}'
-      hx-target="#study-area"
-      @click="flipped = false"
-    >Good</button>
+    <!-- more rating buttons -->
   </div>
 </div>
 ```
 
-The HTMX POST returns the next card's HTML. Alpine handles the flip animation.
+Alpine owns the flip state. HTMX POST returns the next card's HTML.
 
-### Pattern 7: Infinite Scroll → HTMX revealed
+### Pattern 6: Infinite Scroll → HTMX revealed
 
-```tsx
-// BEFORE: React — IntersectionObserver + state + cleanup
-function Feed() {
-  const [page, setPage] = useState(1)
-  const { data } = useInfiniteQuery(...)
-  const ref = useRef(null)
-
-  useEffect(() => {
-    const observer = new IntersectionObserver(...)
-    observer.observe(ref.current)
-    return () => observer.disconnect()
-  }, [])
-
-  return (
-    <div>
-      {data.pages.map(page => page.items.map(item => <Card key={item.id} {...item} />))}
-      <div ref={ref} />
-    </div>
-  )
-}
-```
+Replace IntersectionObserver + useEffect + cleanup with a single HTMX attribute:
 
 ```html
-<!-- AFTER: HTMX revealed trigger on last item -->
-<!-- Server renders the last card with a sentinel: -->
+<!-- Server renders the last card with a sentinel -->
 <div
   hx-get="/partials/feed?page=3&cursor=CURSOR"
   hx-trigger="revealed"
@@ -349,50 +218,15 @@ function Feed() {
 </div>
 ```
 
-Server returns next batch of cards. Last card in each batch carries the sentinel for the next page. No client-side state, no cleanup.
+Server returns next batch of cards. Last card in each batch carries the sentinel for the next page.
 
-### Pattern 8: React Context/Providers → Middleware + Astro.locals
+### Pattern 7: Multi-Region Updates → OOB Swaps
 
-```tsx
-// BEFORE: React context for auth
-function App() {
-  return (
-    <AuthProvider>
-      <ThemeProvider>
-        <Layout><Outlet /></Layout>
-      </ThemeProvider>
-    </AuthProvider>
-  )
-}
-```
-
-```typescript
-// AFTER: Astro middleware
-export const onRequest = defineMiddleware(async (context, next) => {
-  context.locals.user = await resolveUser(context.request)
-  return next()
-})
-```
-
-Access in any page: `Astro.locals.user`. No provider trees, no hydration cost.
-
-### Pattern 9: Multi-Region Updates → OOB Swaps
-
-React mutations that update multiple UI regions (main content + sidebar count, list + header badge) use `hx-swap-oob="true"` to update extra elements in a single response.
-
-```tsx
-// BEFORE: React — action revalidates, multiple components re-render
-export async function action({ request }: Route.ActionArgs) {
-  const formData = await request.formData()
-  const project = await createProject(formData.get("name") as string)
-  throw redirect(`/project/${project.id}`)
-}
-// React Router revalidates all loaders; sidebar and main content both re-render
-```
+When a mutation needs to update multiple UI regions (main content + sidebar count, list + header badge):
 
 ```astro
 ---
-// AFTER: Partial returns main content + OOB sidebar update in one response
+// Partial returns primary content + OOB updates in one response
 export const partial = true
 const project = await createProject(formData.get("name") as string)
 Astro.response.headers.set("HX-Push-Url", `/project/${project.id}`)
@@ -405,54 +239,34 @@ Astro.response.headers.set("HX-Push-Url", `/project/${project.id}`)
 </div>
 ```
 
-Use `HX-Push-Url` with OOB for common operations (one roundtrip). Use `HX-Redirect` only when simplicity matters (two roundtrips — client makes a new request to the redirect URL).
-
-### Pattern 10: Loading States → .htmx-request Class
-
-React's `fetcher.state` and `useNavigation().state` become CSS-driven via HTMX's `.htmx-request` class, added to the triggering element during requests.
-
-```tsx
-// BEFORE: React — check fetcher.state for pending UI
-<button disabled={fetcher.state !== "idle"}>
-  {fetcher.state !== "idle" ? <Spinner /> : "Save"}
-</button>
-```
+### Pattern 8: Loading States → .htmx-request Class
 
 ```html
-<!-- AFTER: HTMX — .htmx-request class + Tailwind group -->
+<!-- HTMX adds .htmx-request class during requests -->
 <button class="group" hx-post="/partials/save" hx-disabled-elt="this">
   <span class="group-[.htmx-request]:hidden">Save</span>
-  <img class="hidden group-[.htmx-request]:inline size-4" src="/spinner.svg" alt="" />
+  <span class="hidden group-[.htmx-request]:inline">Saving...</span>
 </button>
 ```
-
-`hx-disabled-elt="this"` prevents double-submit. `group-[.htmx-request]:hidden` and `group-[.htmx-request]:inline` toggle visibility during the request.
 
 ## Migration Order
 
 Port routes in this order (easiest to hardest):
 
-1. **Static pages** — Landing, pricing, about. Copy HTML, add Astro frontmatter. No interactivity needed.
-2. **Auth pages** — Signin, signup, reset password. Standard forms with POST handlers.
-3. **List pages** — Profiles, decks, places. Server-rendered lists with URL pagination.
-4. **Filter pages** — Explore species/decks. HTMX filters with `hx-include`.
-5. **Detail pages** — Species detail, deck detail. Multiple sections, toggles, dialogs.
-6. **Interactive pages** — Study session, deck builder. Alpine state machines.
-7. **Feed pages** — For You, activity feed. HTMX infinite scroll.
+1. **Static pages** — Landing, about. Copy HTML, add Astro frontmatter.
+2. **Auth pages** — Signin, signup, reset password. POST handlers.
+3. **List pages** — Server-rendered lists with URL pagination.
+4. **Filter pages** — HTMX filters with `hx-include`.
+5. **Detail pages** — Multiple sections, toggles, dialogs.
+6. **Interactive pages** — Alpine state machines.
+7. **Feed pages** — HTMX infinite scroll.
 
 ## File Count Tradeoff
 
-AHA apps have **more files** than React Router apps because:
-- Every toggle button needs a partial page (`src/pages/partials/`)
-- Components can't share action handlers — each needs its own endpoint
-- No equivalent of `useFetcher` that handles multiple intents in one route action
-
-The partials pattern is more explicit (easier to debug) but creates more files. Keep partials minimal: authenticate, call a server function, render the component.
+AHA apps have **more files** because every toggle button needs a partial page (`src/pages/partials/`). Components can't share action handlers — each needs its own endpoint. Keep partials minimal: authenticate, call a server function, render the component.
 
 ## What NOT to Port
 
-- **Optimistic UI** — Drop it. HTMX waits for the server response (100-150ms). Use `hx-disabled-elt="this"` to prevent double-submit.
-- **Client-side caching** — HTMX re-fetches from the server on every interaction. The browser's HTTP cache handles the rest.
 - **Error boundaries** — Replace with HTMX error events (`htmx:responseError`, `htmx:sendError`) in a global handler.
 - **Suspense boundaries** — The server renders complete HTML. Use `loading="lazy"` for images.
 
@@ -465,7 +279,3 @@ The partials pattern is more explicit (easier to debug) but creates more files. 
 3. **Fragment vs full page** — Check `HX-Target`, not just `HX-Request`. Boosted links omit `HX-Target`; filter swaps include it. A fragment returned to a boosted link replaces the entire page body.
 
 4. **Alpine dies after HTMX swap** — `Alpine.start()` runs once. Add an `htmx:afterSettle` listener in the Layout that calls `Alpine.initTree(document.body)` to re-initialize Alpine directives in swapped DOM.
-
-5. **`export const partial = true`** — Every file in `src/pages/partials/` needs this. Without it, Astro wraps the output in a full HTML document.
-
-6. **Pass variant props through `hx-vals`** — If a component has size/style variants, include them in `hx-vals` so the partial returns the correct variant after a toggle.
