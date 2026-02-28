@@ -19,12 +19,9 @@ Common objections and what we found after completing the port:
 
 **"You'll lose optimistic UI."** True, but it rarely matters. Server round-trips take 100-150ms. Use `hx-disabled-elt="this"` to prevent double-submit during the wait.
 
-**"Server modules will need a full rewrite."** Most server files copy over with just import path changes (`~/lib/` → `@/lib/`, `process.env` → `import.meta.env`).
-
 **What may surprise you:**
 - The partial page pattern creates more files than expected (components directory grew 80%)
 - Total code reduction is larger than expected (27% fewer lines, 33% less complexity)
-- AHA pages can be slower than React if images aren't optimized (see Performance section)
 
 ## Measured Results
 
@@ -37,7 +34,6 @@ Common objections and what we found after completing the port:
 | Complexity | 4,252 | 2,857 | **-33%** |
 | Routes/Pages LoC | ~8,500 | ~3,300 | **-61%** |
 | Components LoC | ~6,000 | ~10,800 | +80% |
-| Server modules LoC | ~13,000 | ~12,500 | -4% |
 
 More files because every toggle button needs a partial page. Less code because no hydration, no client state management, no React hooks.
 
@@ -459,17 +455,6 @@ AHA apps have **more files** than React Router apps because:
 
 The partials pattern is more explicit (easier to debug) but creates more files. Keep partials minimal: authenticate, call a server function, render the component.
 
-## Server Module Reuse
-
-Server-side modules (`*.server.ts`) port with minimal changes:
-- Same database queries (Kysely, Supabase, etc.)
-- Same validation logic (Valibot, Zod)
-- Change `~/lib/` imports to `@/lib/` (Astro alias)
-- Change `process.env` to `import.meta.env` (Astro/Vite requirement)
-- Change `context.locals` to `Astro.locals` in page files
-
-Most server files copy over with just import path changes.
-
 ## What NOT to Port
 
 - **Optimistic UI** — Drop it. HTMX waits for the server response (100-150ms). Use `hx-disabled-elt="this"` to prevent double-submit.
@@ -489,21 +474,4 @@ Most server files copy over with just import path changes.
 
 5. **`export const partial = true`** — Every file in `src/pages/partials/` needs this. Without it, Astro wraps the output in a full HTML document.
 
-6. **Hidden images still load** — Chrome fetches `loading="lazy"` images inside `display: none` containers. Use `<picture>` with `<source media>` for responsive hiding, or Alpine `:src` for overlay images.
-
-7. **`font-display: swap` not `block`** — `block` hides text until fonts load. `swap` shows fallback text immediately. On slow connections, this alone cuts LCP by seconds.
-
-8. **Pass variant props through `hx-vals`** — If a component has size/style variants, include them in `hx-vals` so the partial returns the correct variant after a toggle.
-
-## Performance Optimization Checklist
-
-After porting, run through these optimizations:
-
-1. Wrap images hidden on mobile (`hidden md:block`) in `<picture>` with `<source media>` — the browser only fetches sources whose media query matches. Chrome eagerly fetches `loading="lazy"` images inside `display: none` containers.
-2. Use Alpine `:src` binding for lightbox/modal overlay images (`:src="open && '/path/to/image.webp'"`) — the image only loads when the overlay opens. Without this, every Lightbox on the page loads its full-size image on page load.
-3. Add `font-display: swap` to all `@font-face` declarations — `block` hides text until fonts load, `swap` shows fallback text immediately. On slow connections, this alone cuts LCP by seconds.
-4. Preload fonts with `<link rel="preload" as="font" crossorigin>` — starts download before CSS is parsed
-5. Preconnect to external CDNs with `<link rel="preconnect">`
-6. Add `width` and `height` to all `<img>` tags (prevents CLS)
-7. Add `fetchpriority="high"` to the LCP image (hero/above-fold)
-8. Use `hx-disabled-elt="this"` on all toggle buttons
+6. **Pass variant props through `hx-vals`** — If a component has size/style variants, include them in `hx-vals` so the partial returns the correct variant after a toggle.
