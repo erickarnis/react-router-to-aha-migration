@@ -75,29 +75,25 @@ Data fetching moves from a loader function into the Astro `---` fence.
 ```tsx
 // BEFORE: React Router
 export async function loader({ request }: Route.LoaderArgs) {
-  const url = new URL(request.url)
-  const page = parseInt(url.searchParams.get("page") ?? "1")
-  const species = await getSpecies({ page })
-  return { species, page }
+  const species = await getSpecies()
+  return { species }
 }
 
 export default function SpeciesPage({ loaderData }: Route.ComponentProps) {
-  const { species, page } = loaderData
-  return <SpeciesGrid species={species} page={page} />
+  const { species } = loaderData
+  return <SpeciesGrid species={species} />
 }
 ```
 
 ```astro
 ---
 // AFTER: Astro page
-const url = new URL(Astro.request.url)
-const page = parseInt(url.searchParams.get("page") ?? "1")
-const species = await getSpecies({ page })
+const species = await getSpecies()
 ---
-<SpeciesGrid species={species} page={page} />
+<SpeciesGrid species={species} />
 ```
 
-No separate loader function, no `loaderData` typing. Fetching and rendering share one file.
+No loader function, no `loaderData` typing. Fetching and rendering share one file.
 
 ### Pattern 2: Action → Astro POST Handler
 
@@ -156,12 +152,11 @@ function FavouriteButton({ taxonId, isFavourited }: Props) {
 ```astro
 ---
 // AFTER: Astro component (no client JS)
-interface Props { taxonId: number; isFavourited: boolean; size?: "sm" | "md" | "lg" }
-const { taxonId, isFavourited, size = "md" } = Astro.props
+const { taxonId, isFavourited } = Astro.props
 ---
 <button
   hx-post="/partials/favourite-button"
-  hx-vals={JSON.stringify({ taxonId, size })}
+  hx-vals={JSON.stringify({ taxonId })}
   hx-target="this"
   hx-swap="outerHTML"
   hx-disabled-elt="this"
@@ -182,11 +177,10 @@ const user = Astro.locals.user
 if (!user) return new Response(null, { status: 200, headers: { "HX-Redirect": "/signin" } })
 
 const formData = await Astro.request.formData()
-const taxonId = parseInt(formData.get("taxonId") as string)
-const size = (formData.get("size") as string) || "md"
+const taxonId = Number(formData.get("taxonId"))
 const result = await toggleFavourite(user.id, taxonId)
 ---
-<FavouriteButton taxonId={taxonId} isFavourited={result.favourited} size={size} />
+<FavouriteButton taxonId={taxonId} isFavourited={result.favourited} />
 ```
 
 The partial renders the same Astro component — never duplicate component HTML in a partial page.
