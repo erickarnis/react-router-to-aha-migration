@@ -327,13 +327,24 @@ The HTMX POST returns the next card's HTML. Alpine handles the flip animation.
 
 ```tsx
 // BEFORE: React — IntersectionObserver + state + cleanup
-const ref = useRef(null)
-useEffect(() => {
-  const observer = new IntersectionObserver(([e]) => { if (e.isIntersecting) loadMore() })
-  observer.observe(ref.current)
-  return () => observer.disconnect()
-}, [])
-return <div>{items.map(i => <Card {...i} />)}<div ref={ref} /></div>
+function Feed() {
+  const [page, setPage] = useState(1)
+  const { data } = useInfiniteQuery(...)
+  const ref = useRef(null)
+
+  useEffect(() => {
+    const observer = new IntersectionObserver(...)
+    observer.observe(ref.current)
+    return () => observer.disconnect()
+  }, [])
+
+  return (
+    <div>
+      {data.pages.map(page => page.items.map(item => <Card key={item.id} {...item} />))}
+      <div ref={ref} />
+    </div>
+  )
+}
 ```
 
 ```html
@@ -488,9 +499,9 @@ Most server files copy over with just import path changes.
 
 After porting, run through these optimizations:
 
-1. Wrap images hidden on mobile (`hidden md:block`) in `<picture>` with `<source media>` — the browser only fetches sources whose media query matches
-2. Use Alpine `:src` binding for lightbox/modal overlay images (`:src="open && '/path/to/image.webp'"`) — the image only loads when opened
-3. Add `font-display: swap` to all `@font-face` declarations
+1. Wrap images hidden on mobile (`hidden md:block`) in `<picture>` with `<source media>` — the browser only fetches sources whose media query matches. Chrome eagerly fetches `loading="lazy"` images inside `display: none` containers.
+2. Use Alpine `:src` binding for lightbox/modal overlay images (`:src="open && '/path/to/image.webp'"`) — the image only loads when the overlay opens. Without this, every Lightbox on the page loads its full-size image on page load.
+3. Add `font-display: swap` to all `@font-face` declarations — `block` hides text until fonts load, `swap` shows fallback text immediately. On slow connections, this alone cuts LCP by seconds.
 4. Preload fonts with `<link rel="preload" as="font" crossorigin>` — starts download before CSS is parsed
 5. Preconnect to external CDNs with `<link rel="preconnect">`
 6. Add `width` and `height` to all `<img>` tags (prevents CLS)
